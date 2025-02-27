@@ -57,8 +57,8 @@ async function makeWebexApiRequest(endpoint, params, retries = MAX_RETRIES) {
   }
 }
 
-// API endpoint to fetch call history
-app.get('/api/calls', async (req, res) => {
+// API endpoint to fetch call history (/api/calls for new frontend, /api/cdr for backward compatibility)
+app.get(['/api/calls', '/api/cdr'], async (req, res) => {
   try {
     const { startDate, endDate, userId, limit } = req.query;
     
@@ -118,8 +118,26 @@ app.get('/api/users', async (req, res) => {
 // API endpoint to get API health status
 app.get('/api/health', async (req, res) => {
   try {
+    // Verify the token exists
+    if (!process.env.WEBEX_TOKEN) {
+      console.error('API Health Check: No Webex token found in environment variables');
+      return res.status(500).json({
+        status: 'unhealthy',
+        error: 'No Webex API token configured',
+        details: {
+          message: 'The WEBEX_TOKEN environment variable is missing or empty',
+          resolution: 'Please check your .env file and ensure WEBEX_TOKEN is properly set'
+        }
+      });
+    }
+    
+    // Log attempt to check health
+    console.log('API Health Check: Attempting to connect to Webex API...');
+    
     // Test connection to Webex API
     const data = await makeWebexApiRequest('/people/me', {});
+    
+    console.log('API Health Check: Successfully connected to Webex API');
     
     res.json({
       status: 'healthy',
@@ -130,10 +148,32 @@ app.get('/api/health', async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({
+    console.error('API Health Check Error:', error.message);
+    
+    // Provide more helpful error information based on status code
+    let errorMessage = error.message || 'Unknown error connecting to Webex API';
+    let resolutionSteps = [];
+    
+    if (error.status === 401) {
+      errorMessage = 'Authentication failed - invalid or expired token';
+      resolutionSteps = [
+        'Generate a new token at developer.webex.com',
+        'Update your .env file with the new token',
+        'Restart the application'
+      ];
+    } else if (error.status === 429) {
+      errorMessage = 'Rate limit exceeded';
+      resolutionSteps = [
+        'Wait a few minutes before trying again',
+        'Reduce the frequency of API requests'
+      ];
+    }
+    
+    res.status(error.status || 500).json({
       status: 'unhealthy',
-      error: error.message,
-      details: error.details
+      error: errorMessage,
+      details: error.details,
+      resolution: resolutionSteps.length > 0 ? resolutionSteps : undefined
     });
   }
 });

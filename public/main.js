@@ -74,22 +74,51 @@ document.addEventListener('DOMContentLoaded', () => {
    */
   async function checkApiHealth() {
     try {
+      console.log('Checking API health...');
       const response = await fetch(API_ENDPOINTS.HEALTH);
+      
+      // Handle non-200 responses
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'API connection unhealthy');
+      }
+      
+      // Parse response JSON (only once)
       const data = await response.json();
       
       if (data.status === 'healthy') {
+        console.log('API health check successful');
         statusIndicator.className = 'alert alert-success mb-3';
         statusIndicator.innerHTML = `<strong>API Connected:</strong> Authenticated as ${data.api.user}`;
         setTimeout(() => {
           statusIndicator.style.display = 'none';
         }, 5000);
       } else {
-        throw new Error('API connection unhealthy');
+        throw new Error(data.error || 'API connection unhealthy');
       }
     } catch (error) {
       console.error('API health check failed:', error);
-      statusIndicator.className = 'alert alert-warning mb-3';
-      statusIndicator.innerHTML = '<strong>Warning:</strong> API connection check failed. Some features may not work properly.';
+      
+      // Create a more informative error message
+      let errorMessage = error.message || 'API connection check failed';
+      
+      // Display error to user
+      statusIndicator.className = 'alert alert-danger mb-3';
+      statusIndicator.innerHTML = `
+        <div>
+          <strong>API Connection Error:</strong> ${errorMessage}
+        </div>
+        <div class="mt-2">
+          <p class="mb-1">Possible solutions:</p>
+          <ul class="mb-2">
+            <li>Check your Webex API token in the .env file</li>
+            <li>Make sure your token has not expired (tokens expire after 12 hours)</li>
+            <li>Verify you have the correct permissions (spark:people_read)</li>
+          </ul>
+          <button class="btn btn-sm btn-outline-danger" onclick="location.reload()">Retry Connection</button>
+        </div>
+      `;
+      
       throw error;
     }
   }
