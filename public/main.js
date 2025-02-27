@@ -1,4 +1,18 @@
 document.addEventListener('DOMContentLoaded', () => {
+  // Constants
+  const API_ENDPOINTS = {
+    USERS: '/api/users',
+    CALLS: '/api/calls',
+    HEALTH: '/api/health'
+  };
+  
+  const CALL_TYPES = {
+    INBOUND: 'inbound',
+    OUTBOUND: 'outbound',
+    MISSED: 'missed',
+    ALL: 'all'
+  };
+
   // DOM elements
   const filterForm = document.getElementById('filterForm');
   const startDateInput = document.getElementById('startDate');
@@ -14,89 +28,170 @@ document.addEventListener('DOMContentLoaded', () => {
   const filterInbound = document.getElementById('filterInbound');
   const filterOutbound = document.getElementById('filterOutbound');
   const filterMissed = document.getElementById('filterMissed');
+  const statusIndicator = document.createElement('div');
+  
+  // Add status indicator to page
+  document.querySelector('.container').prepend(statusIndicator);
+  statusIndicator.className = 'alert alert-info mb-3';
+  statusIndicator.innerHTML = 'Checking API connection...';
 
   // Set default dates
   const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 7); // Default to last 7 days
+  const oneWeekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
   
-  startDateInput.valueAsDate = yesterday;
+  startDateInput.valueAsDate = oneWeekAgo;
   endDateInput.valueAsDate = today;
 
-  // Store users and call data
-  let users = [];
-  let callData = [];
-  let currentFilter = 'all';
+  // Store application state
+  const appState = {
+    users: [],
+    callData: [],
+    currentFilter: CALL_TYPES.ALL,
+    isLoading: false
+  };
 
-  // Fetch users
-  fetchUsers();
+  // Check API health and fetch users on load
+  checkApiHealth()
+    .then(() => fetchUsers())
+    .catch(error => {
+      console.error('Startup error:', error);
+      statusIndicator.className = 'alert alert-danger mb-3';
+      statusIndicator.innerHTML = `<strong>Error:</strong> ${error.message}`;
+    });
 
   // Event listeners
   filterForm.addEventListener('submit', handleFormSubmit);
   selectAllBtn.addEventListener('click', selectAllUsers);
   deselectAllBtn.addEventListener('click', deselectAllUsers);
-  filterAll.addEventListener('click', () => filterCalls('all'));
-  filterInbound.addEventListener('click', () => filterCalls('inbound'));
-  filterOutbound.addEventListener('click', () => filterCalls('outbound'));
-  filterMissed.addEventListener('click', () => filterCalls('missed'));
+  filterAll.addEventListener('click', () => filterCalls(CALL_TYPES.ALL));
+  filterInbound.addEventListener('click', () => filterCalls(CALL_TYPES.INBOUND));
+  filterOutbound.addEventListener('click', () => filterCalls(CALL_TYPES.OUTBOUND));
+  filterMissed.addEventListener('click', () => filterCalls(CALL_TYPES.MISSED));
 
-  // Functions
-  async function fetchUsers() {
+  /**
+   * Check API health status
+   * @returns {Promise<void>}
+   */
+  async function checkApiHealth() {
     try {
-      const response = await fetch('/api/users');
+      const response = await fetch(API_ENDPOINTS.HEALTH);
       const data = await response.json();
       
-      if (data.error) {
-        userList.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
-        return;
+      if (data.status === 'healthy') {
+        statusIndicator.className = 'alert alert-success mb-3';
+        statusIndicator.innerHTML = `<strong>API Connected:</strong> Authenticated as ${data.api.user}`;
+        setTimeout(() => {
+          statusIndicator.style.display = 'none';
+        }, 5000);
+      } else {
+        throw new Error('API connection unhealthy');
       }
-      
-      users = data.items || [];
-      renderUserList();
     } catch (error) {
-      userList.innerHTML = `<div class="alert alert-danger">Failed to fetch users: ${error.message}</div>`;
+      console.error('API health check failed:', error);
+      statusIndicator.className = 'alert alert-warning mb-3';
+      statusIndicator.innerHTML = '<strong>Warning:</strong> API connection check failed. Some features may not work properly.';
+      throw error;
     }
   }
 
+  /**
+   * Fetch users from API
+   * @returns {Promise<void>}
+   */
+  async function fetchUsers() {
+    try {
+      userList.innerHTML = `
+        <div class="text-center">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading users...</span>
+          </div>
+          <p>Loading users...</p>
+        </div>
+      `;
+      
+      const response = await fetch(API_ENDPOINTS.USERS);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch users');
+      }
+      
+      const data = await response.json();
+      
+      if (!data.items || data.items.length === 0) {
+        userList.innerHTML = '<p class="text-center">No users found</p>';
+        return;
+      }
+      
+      appState.users = data.items;
+      renderUserList();
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      userList.innerHTML = `
+        <div class="alert alert-danger">
+          <strong>Error:</strong> ${error.message}
+          <button class="btn btn-sm btn-outline-danger mt-2" onclick="fetchUsers()">Retry</button>
+        </div>
+      `;
+    }
+  }
+
+  /**
+   * Render the user list
+   */
   function renderUserList() {
-    if (users.length === 0) {
-      userList.innerHTML = '<p>No users found</p>';
+    if (appState.users.length === 0) {
+      userList.innerHTML = '<p class="text-center">No users found</p>';
       return;
     }
 
-    userList.innerHTML = users.map(user => `
+    userList.innerHTML = appState.users.map(user => `
       <div class="form-check">
         <input class="form-check-input user-checkbox" type="checkbox" value="${user.id}" id="user-${user.id}">
         <label class="form-check-label" for="user-${user.id}">
-          ${user.displayName || user.firstName + ' ' + user.lastName}
+          ${user.displayName || (user.firstName + ' ' + user.lastName)}
         </label>
       </div>
     `).join('');
   }
 
+  /**
+   * Select all users
+   */
   function selectAllUsers() {
     document.querySelectorAll('.user-checkbox').forEach(checkbox => {
       checkbox.checked = true;
     });
   }
 
+  /**
+   * Deselect all users
+   */
   function deselectAllUsers() {
     document.querySelectorAll('.user-checkbox').forEach(checkbox => {
       checkbox.checked = false;
     });
   }
 
+  /**
+   * Get selected user IDs
+   * @returns {string[]} Array of selected user IDs
+   */
   function getSelectedUsers() {
     const selectedCheckboxes = document.querySelectorAll('.user-checkbox:checked');
     return Array.from(selectedCheckboxes).map(cb => cb.value);
   }
 
+  /**
+   * Handle form submission
+   * @param {Event} e - Form submit event
+   */
   async function handleFormSubmit(e) {
     e.preventDefault();
     
     const startDate = startDateInput.value;
     const endDate = endDateInput.value;
-    const limit = limitInput.value;
+    const limit = limitInput.value || 100;
     const selectedUsers = getSelectedUsers();
     
     if (!startDate || !endDate) {
@@ -104,79 +199,104 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // If no users selected, show warning
     if (selectedUsers.length === 0) {
       alert('Please select at least one user');
       return;
     }
 
-    // Set loading state
+    appState.isLoading = true;
     loading.style.display = 'block';
     callList.innerHTML = '';
     
     try {
+      // Format dates properly
+      const formattedStartDate = `${startDate}T00:00:00.000Z`;
+      const formattedEndDate = `${endDate}T23:59:59.999Z`;
+      
       // Fetch call data for each selected user
       const callPromises = selectedUsers.map(userId => 
-        fetchUserCalls(userId, startDate, endDate, Math.min(limit, 100))
+        fetchUserCalls(userId, formattedStartDate, formattedEndDate, Math.min(limit, 200))
       );
       
       const results = await Promise.all(callPromises);
       
       // Combine all call data
-      callData = results.flat().sort((a, b) => 
-        new Date(b.startTime) - new Date(a.startTime)
+      appState.callData = results.flat().sort((a, b) => 
+        new Date(b.time || b.startTime) - new Date(a.time || a.startTime)
       );
       
       renderCallData();
       updateCallStats();
     } catch (error) {
-      console.error('Error details:', error);
-      callList.innerHTML = `<div class="alert alert-danger">
-        <h5>Error fetching call data:</h5>
-        <p>${error.message || 'Unknown error'}</p>
-        <p>Check the console for more details or try again with different parameters.</p>
-      </div>`;
+      console.error('Error fetching call data:', error);
+      callList.innerHTML = `
+        <div class="alert alert-danger">
+          <h5>Error fetching call data:</h5>
+          <p>${error.message || 'Unknown error'}</p>
+          <p>Please check your connection and try again.</p>
+        </div>
+      `;
     } finally {
+      appState.isLoading = false;
       loading.style.display = 'none';
     }
   }
 
+  /**
+   * Fetch call data for a specific user
+   * @param {string} userId - User ID
+   * @param {string} startDate - Start date (ISO format)
+   * @param {string} endDate - End date (ISO format)
+   * @param {number} limit - Maximum number of records to return
+   * @returns {Promise<Object[]>} Call data
+   */
   async function fetchUserCalls(userId, startDate, endDate, limit) {
     try {
-      // Format dates according to ISO 8601
-      const formattedStartDate = `${startDate}T00:00:00.000Z`;
-      const formattedEndDate = `${endDate}T23:59:59.999Z`;
-      console.log(`Fetching calls for user ${userId} from ${formattedStartDate} to ${formattedEndDate}`);
+      console.log(`Fetching calls for user ${userId} from ${startDate} to ${endDate}`);
       
-      const response = await fetch(`/api/cdr?userId=${userId}&startDate=${formattedStartDate}&endDate=${formattedEndDate}&limit=${limit}`);
-      const data = await response.json();
+      const url = new URL(API_ENDPOINTS.CALLS, window.location.origin);
+      url.searchParams.append('userId', userId);
+      url.searchParams.append('startDate', startDate);
+      url.searchParams.append('endDate', endDate);
+      url.searchParams.append('limit', limit);
       
-      if (data.error) {
-        console.error(`Error for user ${userId}:`, data.error);
-        throw new Error(data.error);
+      const response = await fetch(url.toString());
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch call data');
       }
       
-      return (data.items || []).map(call => {
-        // Add user info to the call data
-        const user = users.find(u => u.id === userId);
-        return {
-          ...call,
-          userName: user ? (user.displayName || `${user.firstName} ${user.lastName}`) : 'Unknown User'
-        };
-      });
+      const data = await response.json();
+      
+      if (!data.items || data.items.length === 0) {
+        return [];
+      }
+      
+      // Add user info to each call record
+      const user = appState.users.find(u => u.id === userId);
+      const userName = user ? (user.displayName || `${user.firstName} ${user.lastName}`) : 'Unknown User';
+      
+      return data.items.map(call => ({
+        ...call,
+        userName
+      }));
     } catch (error) {
       console.error(`Error fetching calls for user ${userId}:`, error);
       throw error;
     }
   }
 
+  /**
+   * Render call data
+   */
   function renderCallData() {
-    if (callData.length === 0) {
+    if (appState.callData.length === 0) {
       callList.innerHTML = '<p class="text-center text-muted">No call history found for the selected criteria</p>';
       return;
     }
 
-    const filteredCalls = filterCallsByType(callData, currentFilter);
+    const filteredCalls = filterCallsByType(appState.callData, appState.currentFilter);
     
     if (filteredCalls.length === 0) {
       callList.innerHTML = '<p class="text-center text-muted">No calls match the selected filter</p>';
@@ -184,7 +304,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     callList.innerHTML = filteredCalls.map(call => {
-      // Handle the new telephony API format
       const startTime = new Date(call.time || call.startTime);
       const formattedDate = startTime.toLocaleDateString();
       const formattedTime = startTime.toLocaleTimeString();
@@ -196,28 +315,10 @@ document.addEventListener('DOMContentLoaded', () => {
         duration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
       }
 
-      let callType = 'Unknown';
-      let typeClass = '';
+      // Determine call type and class
+      const { typeDisplay, typeClass } = getCallTypeInfo(call);
       
-      // Map the telephony API call types to our internal types
-      if (call.type === 'received' || call.callType === 'in') {
-        callType = 'Inbound';
-        typeClass = 'call-inbound';
-      } else if (call.type === 'placed' || call.callType === 'out') {
-        callType = 'Outbound';
-        typeClass = 'call-outbound';
-      } else if (call.type === 'missed') {
-        callType = 'Inbound (Missed)';
-        typeClass = 'call-missed';
-      }
-      
-      // Also check the disposition field from the old API format
-      if (call.disposition === 'missed') {
-        callType = 'Inbound (Missed)';
-        typeClass = 'call-missed';
-      }
-
-      // Extract caller and called info based on API format
+      // Extract caller and called info
       const fromNumber = call.from || call.number || call.callerNumber || 'Unknown';
       const toNumber = call.to || call.calledNumber || 'Unknown';
       const callerName = call.name || call.callerName || '';
@@ -226,7 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="call-item">
           <div class="d-flex justify-content-between align-items-center">
             <div>
-              <span class="call-type ${typeClass}">${callType}</span>
+              <span class="call-type ${typeClass}">${typeDisplay}</span>
               <span class="call-time">${formattedDate} ${formattedTime}</span>
               <span class="call-duration ms-2">Duration: ${duration}</span>
             </div>
@@ -243,28 +344,65 @@ document.addEventListener('DOMContentLoaded', () => {
     }).join('');
   }
 
+  /**
+   * Get call type display info
+   * @param {Object} call - Call record
+   * @returns {Object} Call type display information
+   */
+  function getCallTypeInfo(call) {
+    let typeDisplay = 'Unknown';
+    let typeClass = '';
+    
+    if (call.type === 'received' || call.callType === 'in') {
+      if (call.disposition === 'missed' || call.type === 'missed') {
+        typeDisplay = 'Missed';
+        typeClass = 'call-missed';
+      } else {
+        typeDisplay = 'Inbound';
+        typeClass = 'call-inbound';
+      }
+    } else if (call.type === 'placed' || call.callType === 'out') {
+      typeDisplay = 'Outbound';
+      typeClass = 'call-outbound';
+    }
+    
+    return { typeDisplay, typeClass };
+  }
+
+  /**
+   * Filter calls by type
+   * @param {Object[]} calls - Call records
+   * @param {string} filterType - Filter type
+   * @returns {Object[]} Filtered call records
+   */
   function filterCallsByType(calls, filterType) {
-    if (filterType === 'all') {
+    if (filterType === CALL_TYPES.ALL) {
       return calls;
     }
     
     return calls.filter(call => {
-      // Support both old and new API formats
-      if (filterType === 'inbound') {
-        return (call.callType === 'in' || call.type === 'received') && 
-               call.disposition !== 'missed' && 
-               call.type !== 'missed';
-      } else if (filterType === 'outbound') {
-        return call.callType === 'out' || call.type === 'placed';
-      } else if (filterType === 'missed') {
-        return call.disposition === 'missed' || call.type === 'missed';
+      const isMissed = call.disposition === 'missed' || call.type === 'missed';
+      const isInbound = call.callType === 'in' || call.type === 'received';
+      const isOutbound = call.callType === 'out' || call.type === 'placed';
+      
+      if (filterType === CALL_TYPES.INBOUND) {
+        return isInbound && !isMissed;
+      } else if (filterType === CALL_TYPES.OUTBOUND) {
+        return isOutbound;
+      } else if (filterType === CALL_TYPES.MISSED) {
+        return isMissed;
       }
+      
       return true;
     });
   }
 
+  /**
+   * Set call filter
+   * @param {string} filterType - Filter type
+   */
   function filterCalls(filterType) {
-    currentFilter = filterType;
+    appState.currentFilter = filterType;
     
     // Update active button
     [filterAll, filterInbound, filterOutbound, filterMissed].forEach(btn => {
@@ -272,36 +410,40 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.classList.add('btn-outline-primary');
     });
     
-    const activeButton = document.getElementById(`filter${filterType.charAt(0).toUpperCase() + filterType.slice(1)}`);
-    activeButton.classList.remove('btn-outline-primary');
-    activeButton.classList.add('active', 'btn-primary');
+    const filterMap = {
+      [CALL_TYPES.ALL]: filterAll,
+      [CALL_TYPES.INBOUND]: filterInbound,
+      [CALL_TYPES.OUTBOUND]: filterOutbound,
+      [CALL_TYPES.MISSED]: filterMissed
+    };
+    
+    const activeButton = filterMap[filterType];
+    if (activeButton) {
+      activeButton.classList.remove('btn-outline-primary');
+      activeButton.classList.add('active', 'btn-primary');
+    }
     
     renderCallData();
   }
 
+  /**
+   * Update call statistics
+   */
   function updateCallStats() {
-    if (callData.length === 0) {
+    if (appState.callData.length === 0) {
       callStats.innerHTML = '<p>No data available</p>';
       return;
     }
 
-    const totalCalls = callData.length;
-    // Use same logic as filterCallsByType, supporting both API formats
-    const inboundCalls = callData.filter(call => 
-      (call.callType === 'in' || call.type === 'received') && 
-      call.disposition !== 'missed' && 
-      call.type !== 'missed'
-    ).length;
-    const outboundCalls = callData.filter(call => 
-      call.callType === 'out' || call.type === 'placed'
-    ).length;
-    const missedCalls = callData.filter(call => 
-      call.disposition === 'missed' || call.type === 'missed'
-    ).length;
+    // Count call types
+    const totalCalls = appState.callData.length;
+    const inboundCalls = filterCallsByType(appState.callData, CALL_TYPES.INBOUND).length;
+    const outboundCalls = filterCallsByType(appState.callData, CALL_TYPES.OUTBOUND).length;
+    const missedCalls = filterCallsByType(appState.callData, CALL_TYPES.MISSED).length;
     
     // Calculate total duration
     let totalDuration = 0;
-    callData.forEach(call => {
+    appState.callData.forEach(call => {
       if (call.duration) {
         totalDuration += call.duration;
       }
@@ -327,10 +469,15 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
   }
 
+  /**
+   * Format phone number for display
+   * @param {string} phoneStr - Phone number
+   * @returns {string} Formatted phone number
+   */
   function formatPhoneNumber(phoneStr) {
-    if (!phoneStr) return '';
+    if (!phoneStr) return 'Unknown';
     
-    // Extract just the digits
+    // Extract digits
     const digits = phoneStr.replace(/\D/g, '');
     
     // Format based on length
@@ -340,7 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
     }
     
-    // If not a standard format, return original
+    // Return original if not standard format
     return phoneStr;
   }
 });

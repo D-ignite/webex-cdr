@@ -5,64 +5,93 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const WEBEX_BASE_URL = 'https://webexapis.com/v1';
+const MAX_RETRIES = 2;
 
 // Middleware
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API endpoint to fetch CDR data
-app.get('/api/cdr', async (req, res) => {
+/**
+ * Helper function to make API requests with retry capability
+ * @param {string} endpoint - API endpoint path
+ * @param {Object} params - Query parameters
+ * @param {number} retries - Number of retries remaining
+ * @returns {Promise<Object>} - API response data
+ */
+async function makeWebexApiRequest(endpoint, params, retries = MAX_RETRIES) {
+  try {
+    const url = `${WEBEX_BASE_URL}${endpoint}`;
+    console.log(`Making API request to: ${url}`);
+    console.log('Parameters:', JSON.stringify(params, null, 2));
+    
+    const response = await axios.get(url, {
+      headers: {
+        'Authorization': `Bearer ${process.env.WEBEX_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      params
+    });
+    
+    return response.data;
+  } catch (error) {
+    const status = error.response?.status;
+    const errorData = error.response?.data;
+    
+    console.error(`API Error (${status}):`, JSON.stringify(errorData, null, 2));
+    
+    // Retry on 429 (rate limit) or 5xx (server error) responses
+    if (retries > 0 && (status === 429 || (status >= 500 && status < 600))) {
+      console.log(`Retrying request (${retries} retries left)...`);
+      const delay = status === 429 ? 2000 : 1000; // Longer delay for rate limits
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return makeWebexApiRequest(endpoint, params, retries - 1);
+    }
+    
+    throw {
+      status,
+      message: errorData?.message || error.message,
+      details: errorData,
+      originalError: error
+    };
+  }
+}
+
+// API endpoint to fetch call history
+app.get('/api/calls', async (req, res) => {
   try {
     const { startDate, endDate, userId, limit } = req.query;
     
     // Validate required parameters
     if (!startDate || !endDate) {
-      return res.status(400).json({ error: 'Start date and end date are required' });
+      return res.status(400).json({ 
+        error: 'Missing required parameters',
+        details: 'Start date and end date are required' 
+      });
     }
 
-    // Prepare request parameters
-    // Using parameter names for telephony API
+    // Prepare request parameters for telephony API
     const params = {
       startTime: startDate, // ISO format
-      endTime: endDate     // ISO format
+      endTime: endDate,     // ISO format
+      max: limit || 100
     };
     
-    // Add optional parameters if provided
-    if (userId) params.personId = userId; // Using personId for telephony API
-    if (limit) params.max = limit;
-    
-    console.log('Making API request with params:', JSON.stringify(params, null, 2));
-    console.log('URL: https://webexapis.com/v1/telephony/calls/history');
-    console.log('Token (first 10 chars):', process.env.WEBEX_TOKEN.substring(0, 10) + '...');
-    
-    // Make request to Webex API
-    try {
-      // Use the working endpoint from our tests
-      const response = await axios.get('https://webexapis.com/v1/telephony/calls/history', {
-        headers: {
-          'Authorization': `Bearer ${process.env.WEBEX_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        params
-      });
-      
-      console.log('API response status:', response.status);
-      console.log('API response headers:', JSON.stringify(response.headers, null, 2));
-      console.log('API response data (preview):', JSON.stringify(response.data).substring(0, 300) + '...');
-      
-      res.json(response.data);
-    } catch (axiosError) {
-      console.error('Axios error:', axiosError.message);
-      console.error('Response status:', axiosError.response?.status);
-      console.error('Response data:', JSON.stringify(axiosError.response?.data, null, 2));
-      
-      throw axiosError;
+    // Add user ID if provided
+    if (userId) {
+      params.personId = userId;
     }
+    
+    // Make request to Webex API with retry capability
+    const data = await makeWebexApiRequest('/telephony/calls/history', params);
+    
+    res.json(data);
   } catch (error) {
-    console.error('Error fetching CDR data:', error.response?.data || error.message);
-    console.error('Full error:', JSON.stringify(error.response?.data || error.message, null, 2));
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.message || error.message || 'Failed to fetch CDR data'
+    console.error('Error fetching call history:', error.message);
+    
+    res.status(error.status || 500).json({
+      error: error.message || 'Failed to fetch call history',
+      details: error.details
     });
   }
 });
@@ -70,33 +99,41 @@ app.get('/api/cdr', async (req, res) => {
 // API endpoint to fetch users
 app.get('/api/users', async (req, res) => {
   try {
-    console.log('Fetching users...');
-    console.log('API URL: https://webexapis.com/v1/people');
+    const limit = req.query.limit || 100;
     
-    const response = await axios.get('https://webexapis.com/v1/people', {
-      headers: {
-        'Authorization': `Bearer ${process.env.WEBEX_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      params: {
-        max: 100 // Adjust as needed
+    // Make request to Webex API with retry capability
+    const data = await makeWebexApiRequest('/people', { max: limit });
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching users:', error.message);
+    
+    res.status(error.status || 500).json({
+      error: error.message || 'Failed to fetch users',
+      details: error.details
+    });
+  }
+});
+
+// API endpoint to get API health status
+app.get('/api/health', async (req, res) => {
+  try {
+    // Test connection to Webex API
+    const data = await makeWebexApiRequest('/people/me', {});
+    
+    res.json({
+      status: 'healthy',
+      api: {
+        version: '1.0.0',
+        webexConnection: 'connected',
+        user: data.displayName || data.emails[0]
       }
     });
-    
-    console.log(`Successfully fetched ${response.data.items?.length || 0} users`);
-    
-    if (response.data.items && response.data.items.length > 0) {
-      console.log('First user sample:', JSON.stringify(response.data.items[0], null, 2));
-    }
-    
-    res.json(response.data);
   } catch (error) {
-    console.error('Error fetching users:', error.response?.data || error.message);
-    console.error('Error status:', error.response?.status);
-    console.error('Error details:', JSON.stringify(error.response?.data, null, 2));
-    
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.message || error.message || 'Failed to fetch users'
+    res.status(500).json({
+      status: 'unhealthy',
+      error: error.message,
+      details: error.details
     });
   }
 });
@@ -107,6 +144,7 @@ const findAvailablePort = (startPort) => {
     const server = require('net').createServer();
     server.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
+        console.log(`Port ${startPort} is in use, trying next port...`);
         resolve(findAvailablePort(startPort + 1));
       } else {
         reject(err);
@@ -128,6 +166,7 @@ const findAvailablePort = (startPort) => {
     const availablePort = await findAvailablePort(PORT);
     app.listen(availablePort, () => {
       console.log(`Server running on http://localhost:${availablePort}`);
+      console.log(`API health check: http://localhost:${availablePort}/api/health`);
     });
   } catch (error) {
     console.error('Failed to start server:', error.message);
