@@ -141,17 +141,29 @@ app.get('/api/health', async (req, res) => {
 // Find an available port
 const findAvailablePort = (startPort) => {
   return new Promise((resolve, reject) => {
+    // Ensure port is a number and within valid range (1-65535)
+    const portNum = parseInt(startPort, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      return reject(new Error(`Invalid port number: ${startPort}. Must be between 1 and 65535.`));
+    }
+    
+    // If we've tried too many ports, default to a random port (0)
+    if (portNum > 65000) {
+      console.log('Too many ports in use, using a random available port...');
+      return resolve(0); // Let the OS assign a random available port
+    }
+    
     const server = require('net').createServer();
     server.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
-        console.log(`Port ${startPort} is in use, trying next port...`);
-        resolve(findAvailablePort(startPort + 1));
+        console.log(`Port ${portNum} is in use, trying next port...`);
+        resolve(findAvailablePort(portNum + 1));
       } else {
         reject(err);
       }
     });
     
-    server.listen(startPort, () => {
+    server.listen(portNum, () => {
       const foundPort = server.address().port;
       server.close(() => {
         resolve(foundPort);
@@ -163,12 +175,21 @@ const findAvailablePort = (startPort) => {
 // Start server with available port
 (async () => {
   try {
+    // Try to find an available port, starting with PORT from env or default
+    console.log(`Attempting to start server on port ${PORT}...`);
     const availablePort = await findAvailablePort(PORT);
+    
+    // Start the server with the available port
     app.listen(availablePort, () => {
-      console.log(`Server running on http://localhost:${availablePort}`);
-      console.log(`API health check: http://localhost:${availablePort}/api/health`);
+      console.log(`✅ Server running on http://localhost:${availablePort}`);
+      console.log(`🔍 API health check: http://localhost:${availablePort}/api/health`);
+      console.log(`📞 View call history at http://localhost:${availablePort}`);
     });
   } catch (error) {
-    console.error('Failed to start server:', error.message);
+    console.error(`❌ Failed to start server: ${error.message}`);
+    console.error('Please try again with a different port number or free up ports on your system.');
+    console.error('You can use the following command to set a custom port:');
+    console.error('PORT=8000 npm start');
+    process.exit(1); // Exit with error code
   }
 })();
